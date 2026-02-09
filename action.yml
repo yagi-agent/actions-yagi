@@ -1,0 +1,67 @@
+name: 'Yagi PR Review'
+description: 'AI-powered pull request review using yagi'
+inputs:
+  model:
+    description: 'Model to use (e.g., openai/gpt-4o)'
+    required: false
+    default: 'openai/gpt-4o'
+  prompt:
+    description: 'Custom review prompt'
+    required: false
+    default: |
+      以下のプルリクエストのdiffをレビューしてください。
+      - コード品質の問題をチェックする
+      - 潜在的なバグを探す
+      - 改善を提案する
+      - 結果はMarkdown形式で出力してください
+  yagi_version:
+    description: 'Yagi version to install'
+    required: false
+    default: 'latest'
+  github_token:
+    description: 'GitHub token for posting comments'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+        cache: false
+
+    - name: Install yagi
+      shell: bash
+      run: go install github.com/yagi-agent/yagi@${{ inputs.yagi_version }}
+
+    - name: Review PR
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
+        GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
+        OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY }}
+      run: |
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        if [ -z "$PR_NUMBER" ]; then
+          echo "::error::This action must be run on a pull_request event"
+          exit 1
+        fi
+
+        DIFF=$(gh pr diff "$PR_NUMBER" --repo "${{ github.repository }}")
+        if [ -z "$DIFF" ]; then
+          echo "No diff found, skipping review."
+          exit 0
+        fi
+
+        PROMPT=$(cat <<'PROMPT_END'
+        ${{ inputs.prompt }}
+        PROMPT_END
+        )
+
+        REVIEW=$(printf '%s\n\n```diff\n%s\n```' "$PROMPT" "$DIFF" | yagi -model "${{ inputs.model }}")
+
+        gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body "$REVIEW"
