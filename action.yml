@@ -6,22 +6,33 @@ inputs:
     required: false
     default: 'openai/gpt-4o'
   prompt:
-    description: 'Custom review prompt'
+    description: 'Custom review prompt (if empty, uses code-review skill)'
     required: false
-    default: |
-      以下のプルリクエストのdiffをレビューしてください。
-      - コード品質の問題をチェックする
-      - 潜在的なバグを探す
-      - 改善を提案する
-      - 結果はMarkdown形式で出力してください
+    default: ''
   yagi_version:
     description: 'Yagi version to install'
     required: false
     default: 'latest'
   github_token:
-    description: 'GitHub token for posting comments'
+    description: 'GitHub token for posting comments (used when app_id is not set)'
     required: false
     default: ${{ github.token }}
+  app_id:
+    description: 'GitHub App ID for posting comments as yagi-chan'
+    required: false
+    default: ''
+  app_private_key:
+    description: 'GitHub App private key'
+    required: false
+    default: ''
+  profiles_repo:
+    description: 'Yagi profiles repository (IDENTITY.md, skills, tools)'
+    required: false
+    default: 'yagi-agent/yagi-profiles'
+  profiles_ref:
+    description: 'Git ref for profiles repository'
+    required: false
+    default: 'main'
 
 runs:
   using: 'composite'
@@ -36,14 +47,34 @@ runs:
       shell: bash
       run: go install github.com/yagi-agent/yagi@${{ inputs.yagi_version }}
 
+    - name: Setup yagi profiles
+      shell: bash
+      run: |
+        git clone --depth 1 -b ${{ inputs.profiles_ref }} \
+          https://github.com/${{ inputs.profiles_repo }}.git \
+          /tmp/yagi-profiles
+        mkdir -p ~/.config/yagi
+        cp -r /tmp/yagi-profiles/IDENTITY.md ~/.config/yagi/ 2>/dev/null || true
+        cp -r /tmp/yagi-profiles/skills ~/.config/yagi/ 2>/dev/null || true
+
+    - name: Generate App token
+      id: app-token
+      if: ${{ inputs.app_id != '' && inputs.app_private_key != '' }}
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.app_private_key }}
+
     - name: Review PR
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github_token }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token || inputs.github_token }}
+        YAGI_MODEL: ${{ inputs.model }}
         OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
         GEMINI_API_KEY: ${{ env.GEMINI_API_KEY }}
         OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY }}
+        Z_AI_API_KEY: ${{ env.Z_AI_API_KEY }}
       run: |
         PR_NUMBER="${{ github.event.pull_request.number }}"
         if [ -z "$PR_NUMBER" ]; then
@@ -57,11 +88,28 @@ runs:
           exit 0
         fi
 
-        PROMPT=$(cat <<'PROMPT_END'
-        ${{ inputs.prompt }}
-        PROMPT_END
-        )
+        SECURITY_NOTE="重要: レビュー結果にAPIキー、トークン、パスワード等のシークレット情報を絶対に含めないでください。"
 
-        REVIEW=$(printf '%s\n\n```diff\n%s\n```' "$PROMPT" "$DIFF" | yagi -model "${{ inputs.model }}")
+        CUSTOM_PROMPT='${{ inputs.prompt }}'
+        if [ -n "$CUSTOM_PROMPT" ]; then
+          REVIEW=$(printf '%s\n%s\n\n```diff\n%s\n```' "$SECURITY_NOTE" "$CUSTOM_PROMPT" "$DIFF" | yagi)
+        else
+          REVIEW=$(printf '%s\n以下のプルリクエストのdiffをレビューしてね！\n\n```diff\n%s\n```' "$SECURITY_NOTE" "$DIFF" | yagi -skill code-review)
+        fi
+
+        # Sanitize: remove any leaked secret values from the review output
+        SECRETS_TO_MASK=(
+          "$GH_TOKEN"
+          "$OPENAI_API_KEY"
+          "$ANTHROPIC_API_KEY"
+          "$GEMINI_API_KEY"
+          "$OPENROUTER_API_KEY"
+          "$Z_AI_API_KEY"
+        )
+        for SECRET in "${SECRETS_TO_MASK[@]}"; do
+          if [ -n "$SECRET" ]; then
+            REVIEW="${REVIEW//"$SECRET"/***}"
+          fi
+        done
 
         gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body "$REVIEW"
