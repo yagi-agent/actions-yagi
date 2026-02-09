@@ -56,3 +56,17 @@ API key is passed via environment variables:
 | Anthropic | `ANTHROPIC_API_KEY` |
 | Google | `GEMINI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
+
+## Note
+
+The yagi-profiles repository includes an English version of the identity file (`IDENTITY_EN.md`). You can switch to it by setting the `YAGI_IDENTITY_FILE` environment variable according to your preference.
+
+You can also override the model by setting the `YAGI_MODEL` environment variable:
+
+```yaml
+- uses: yagi-agent/actions-yagi@v1
+  env:
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    YAGI_IDENTITY_FILE: IDENTITY_EN.md
+    YAGI_MODEL: openai/gpt-4o-mini
+```
