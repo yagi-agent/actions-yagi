@@ -59,16 +59,29 @@ runs:
 
     - name: Generate App token
       id: app-token
-      if: ${{ inputs.app_id != '' && inputs.app_private_key != '' }}
+      if: inputs.app_id != '' && inputs.app_private_key != ''
       uses: actions/create-github-app-token@v1
       with:
         app-id: ${{ inputs.app_id }}
         private-key: ${{ inputs.app_private_key }}
 
+    - name: Set GH token
+      id: set-token
+      shell: bash
+      run: |
+        if [ -n "$APP_TOKEN" ]; then
+          echo "token=$APP_TOKEN" >> "$GITHUB_OUTPUT"
+        else
+          echo "token=$FALLBACK_TOKEN" >> "$GITHUB_OUTPUT"
+        fi
+      env:
+        APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        FALLBACK_TOKEN: ${{ inputs.github_token }}
+
     - name: Review PR
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token || inputs.github_token }}
+        GH_TOKEN: ${{ steps.set-token.outputs.token }}
         YAGI_MODEL: ${{ inputs.model }}
         OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
         ANTHROPIC_API_KEY: ${{ env.ANTHROPIC_API_KEY }}
